@@ -434,9 +434,4 @@ https://webapi.sporttery.cn/gateway/jc/football/getMatchCalculatorV1.qry?poolCod
 
 - [LICENSE](./LICENSE)
 
-协议版权声明：
-
-```text
-MIT License
-Copyright (c) 2026 EugeneXXXie
-```
+---
