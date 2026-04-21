@@ -1,0 +1,23 @@
+// ESLint 检查 .vue 文件需要单独配置编辑器：
+// https://eslint.vuejs.org/user-guide/#editor-integrations
+{
+  "root": true,
+  "env": {
+    "browser": true,
+    "es2021": true,
+    "node": true
+  },
+  "extends": [
+    "taro/vue3",
+    "plugin:vue/vue3-essential",
+    "plugin:@typescript-eslint/recommended"
+  ],
+  "parser": "vue-eslint-parser",
+  "parserOptions": {
+    "parser": "@typescript-eslint/parser",
+    "ecmaVersion": "latest",
+    "sourceType": "module"
+  }
+}
+
+

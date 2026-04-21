@@ -1,0 +1,42 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+/dist/
+/.temp/
+/.rn_temp/
+/deploy_versions/
+/.swc/
+/coverage/
+/.cache/
+
+# Generated files
+/src/components.d.ts
+*.tsbuildinfo
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Environment files (keep example files committed)
+.env.local
+.env.*.local
+
+# Lint / tooling caches
+.eslintcache
+.stylelintcache
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*.tmp
+
+# OS files
+.DS_Store
+Thumbs.db
