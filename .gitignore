@@ -9,6 +9,7 @@ node_modules/
 /.swc/
 /coverage/
 /.cache/
+/lib/
 
 # Generated files
 /src/components.d.ts

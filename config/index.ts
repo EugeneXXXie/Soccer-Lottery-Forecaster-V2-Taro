@@ -1,13 +1,11 @@
 import { defineConfig, type UserConfigExport } from '@tarojs/cli'
-import TsconfigPathsPlugin from 'tsconfig-paths-webpack-plugin'
 import devConfig from './dev'
 import prodConfig from './prod'
 import NutUIResolver from '@nutui/auto-import-resolver'
-
 import Components from 'unplugin-vue-components/vite'
 
 // https://taro-docs.jd.com/docs/next/config#defineconfig-辅助函数
-export default defineConfig<'vite'>(async (merge, { command, mode }) => {
+export default defineConfig<'vite'>(async (merge) => {
   const baseConfig: UserConfigExport<'vite'> = {
     projectName: 'SoccerLotteryForecasterTaro',
     date: '2026-4-21',
@@ -28,20 +26,12 @@ export default defineConfig<'vite'>(async (merge, { command, mode }) => {
     sourceRoot: 'src',
     outputRoot: 'dist',
     plugins: ['@tarojs/plugin-html'],
-    defineConstants: {
-    },
-    copy: {
-      patterns: [
-      ],
-      options: {
-      }
-    },
     framework: 'vue3',
     compiler: {
       type: 'vite',
       vitePlugins: [
         Components({
-          resolvers: [NutUIResolver({taro: true})]
+          resolvers: [NutUIResolver({ taro: true })]
         })
       ]
     },

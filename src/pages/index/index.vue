@@ -5,6 +5,7 @@
         <view>
           <view class="hero-title">总进球数</view>
           <view class="hero-subtitle">单场总进球数（过关方式：单关）</view>
+          <view class="hero-subtitle Disclaimer">*本工具仅用于赔率分配辅助与结果测算，不构成任何投注建议，请理性判断并谨慎参与。*</view>
         </view>
         <view class="hero-meta">
           <text class="meta-pill">更新时间：{{ updateTimeText }}</text>
@@ -220,6 +221,7 @@ import {
   normalizePrincipal,
   parseOddsList
 } from '../../utils/lotteryCalculator'
+import { parseRemoteMatchOdds } from '../../utils/matchOdds'
 import type { MatchOdds, ResultRow, StrategyKey } from '../../utils/lotteryCalculator'
 
 // 比赛选择器里每个选项的数据结构。
@@ -567,7 +569,7 @@ async function fetchMatchData() {
             leagueCode?: string
             leagueAbbName?: string
             leagueAllName?: string
-            ttg: MatchOdds
+            ttg?: Partial<Record<keyof MatchOdds, unknown>> | null
           }>
         }>
       }
@@ -589,35 +591,36 @@ async function fetchMatchData() {
 
     matchInfoList.forEach((weekGroup, weekIndex) => {
       const weekLabel = `${weekGroup.weekday} (${weekGroup.businessDate})`
-      dynamicOptions.push({
-        label: weekLabel,
-        value: `group-${weekIndex}`,
-        ttg: { ...DEFAULT_ODDS },
-        disabled: true
-      })
+      const weekOptions: MatchOption[] = []
 
       weekGroup.subMatchList?.forEach((match, matchIndex) => {
+        const parsedOdds = parseRemoteMatchOdds(match.ttg)
+        if (!parsedOdds) {
+          return
+        }
+
         const matchName = `${match.awayTeamAllName} VS ${match.homeTeamAbbName}`
         const presentation = getLeaguePresentation(match.leagueCode, match.leagueAllName || match.leagueAbbName)
 
-        dynamicOptions.push({
+        weekOptions.push({
           label: matchName,
           displayLabel: formatMatchOptionLabel(matchName, presentation.leagueName, presentation.flag),
           leagueName: presentation.leagueName,
           flag: presentation.flag,
           value: `week${weekIndex}-${matchIndex}`,
-          ttg: {
-            s0: Number(match.ttg?.s0),
-            s1: Number(match.ttg?.s1),
-            s2: Number(match.ttg?.s2),
-            s3: Number(match.ttg?.s3),
-            s4: Number(match.ttg?.s4),
-            s5: Number(match.ttg?.s5),
-            s6: Number(match.ttg?.s6),
-            s7: Number(match.ttg?.s7)
-          }
+          ttg: parsedOdds
         })
       })
+
+      if (weekOptions.length > 0) {
+        dynamicOptions.push({
+          label: weekLabel,
+          value: `group-${weekIndex}`,
+          ttg: { ...DEFAULT_ODDS },
+          disabled: true
+        })
+        dynamicOptions.push(...weekOptions)
+      }
     })
 
     options.value = dynamicOptions

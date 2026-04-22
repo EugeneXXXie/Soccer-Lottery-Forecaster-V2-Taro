@@ -2,26 +2,24 @@
   "compilerOptions": {
     "target": "es2017",
     "module": "commonjs",
-    "removeComments": false,
-    "preserveConstEnums": true,
     "moduleResolution": "node",
-    "experimentalDecorators": true,
-    "noImplicitAny": false,
-    "allowSyntheticDefaultImports": true,
-    "outDir": "lib",
+    "jsx": "preserve",
+    "strictNullChecks": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
-    "strictNullChecks": true,
-    "sourceMap": true,
+    "allowSyntheticDefaultImports": true,
+    "resolveJsonModule": true,
+    "allowJs": true,
     "baseUrl": ".",
     "rootDir": ".",
-    "jsx": "preserve",
-    "allowJs": true,
-    "resolveJsonModule": true,
-    "typeRoots": [
-      "node_modules/@types"
-    ]
+    "outDir": "lib",
+    "sourceMap": true,
+    "removeComments": false,
+    "preserveConstEnums": true,
+    "experimentalDecorators": true,
+    "noImplicitAny": false,
+    "skipLibCheck": true
   },
-  "include": ["./src", "./types", "components.d.ts"],
+  "include": ["./src", "./types"],
   "compileOnSave": false
 }

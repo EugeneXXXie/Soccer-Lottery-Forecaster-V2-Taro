@@ -17,7 +17,13 @@
     "parser": "@typescript-eslint/parser",
     "ecmaVersion": "latest",
     "sourceType": "module"
-  }
+  },
+  "overrides": [
+    {
+      "files": ["src/pages/**/index.vue"],
+      "rules": {
+        "vue/multi-word-component-names": "off"
+      }
+    }
+  ]
 }
-
-

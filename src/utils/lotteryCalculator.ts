@@ -51,17 +51,19 @@ export type CalculatorConfig = {
 // 总进球玩法固定 8 档，对应 0 球到 7+ 球
 export const GOAL_KEYS = ['s0', 's1', 's2', 's3', 's4', 's5', 's6', 's7'] as const
 export const GOAL_LABELS = ['0球', '1球', '2球', '3球', '4球', '5球', '6球', '7+球']
+export const MIN_VALID_ODDS = 1.3
+export const DEFAULT_PLACEHOLDER_ODDS = 1.3
 
 // 当接口获取失败时，页面会先回退到一组默认赔率占位值
 export const DEFAULT_ODDS: MatchOdds = {
-  s0: 1.3,
-  s1: 1.3,
-  s2: 1.3,
-  s3: 1.3,
-  s4: 1.3,
-  s5: 1.3,
-  s6: 1.3,
-  s7: 1.3
+  s0: DEFAULT_PLACEHOLDER_ODDS,
+  s1: DEFAULT_PLACEHOLDER_ODDS,
+  s2: DEFAULT_PLACEHOLDER_ODDS,
+  s3: DEFAULT_PLACEHOLDER_ODDS,
+  s4: DEFAULT_PLACEHOLDER_ODDS,
+  s5: DEFAULT_PLACEHOLDER_ODDS,
+  s6: DEFAULT_PLACEHOLDER_ODDS,
+  s7: DEFAULT_PLACEHOLDER_ODDS
 }
 
 // 三档策略：
@@ -114,7 +116,7 @@ export function parseOddsList(oddsForm: Record<(typeof GOAL_KEYS)[number], strin
 
   GOAL_KEYS.forEach((key) => {
     const value = Number(oddsForm[key])
-    const valid = Number.isFinite(value) && value >= 1.3
+    const valid = Number.isFinite(value) && value >= MIN_VALID_ODDS
     fieldErrors[key] = !valid
     if (!valid) {
       hasError = true
