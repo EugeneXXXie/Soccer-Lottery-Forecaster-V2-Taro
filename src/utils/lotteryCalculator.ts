@@ -1,5 +1,20 @@
-// 投注算法核心工具文件
-// 这个文件只负责“数据计算”，不处理任何页面 UI。
+import {
+  createMinimumAllocations,
+  principalToTotalShares,
+  runGreedyAllocation,
+  SHARE_COST_YUAN
+} from './allocationConstraints'
+import { resolveProbabilityVector } from './probabilityModel'
+import type { ProbabilitySource } from './probabilityModel'
+import {
+  evaluatePortfolio,
+  getCoverageMetrics,
+  scoreBalancedCandidate,
+  scoreCoverageCandidate,
+  scoreExpectedCandidate,
+  scorePayoutCandidate
+} from './strategyObjectives'
+import type { CanonicalStrategyKey, PortfolioMetrics } from './strategyObjectives'
 
 export type MatchOdds = {
   s0: number
@@ -20,32 +35,30 @@ export type ResultRow = {
   ExpectedReturn: number
 }
 
-export type StrategyKey = 'balanced' | 'aggressive' | 'all-in'
+export type LegacyStrategyKey = 'balanced' | 'aggressive' | 'all-in'
+export type StrategyKey = Exclude<CanonicalStrategyKey, 'expected'>
 
-// 算法配置项。
-// 当前思路不再是简单按权重均分，而是：
-// 1. 先给每个进球数一个基础仓位
-// 2. 尽量让更多结果达到“回本/盈利线”
-// 3. 同时优先保护低赔率，也就是相对更可能发生的结果
 export type CalculatorConfig = {
-  // 最小投注单位，当前按“股”计算，1 股 = 2 元
   minStakeUnit: number
-  // 需要优先保护的低赔率结果数量
-  protectedCount: number
-  // 概率权重幂次，越大越偏向低赔率结果
-  probabilityPower: number
-  // 盈利覆盖数量优先级，越大越想多覆盖几个结果
-  countPriority: number
-  // 概率优先级，越大越看重低赔率结果的保护
-  probabilityPriority: number
-  // 覆盖效率优先级，越大越倾向优先补“更容易补到盈利线”的结果
-  efficiencyPriority: number
-  // 长赔率额外倾向，越大越激进
-  longshotPriority: number
-  // 单一结果最多允许拿到多少比例的总股数，用于剩余仓位分配阶段
   maxConcentrationRatio: number
-  // 剩余仓位的偏好方向
-  residualPreference: 'protected' | 'balanced' | 'return'
+}
+
+export type PlanSummary = {
+  coverageLevel: 'strong' | 'moderate' | 'limited'
+  concentrationLevel: 'low' | 'medium' | 'high'
+  maximumNetSingleHitReturn: number
+  riskClassification: 'low' | 'medium' | 'high'
+  expectedReturnQuality: 'inactive' | 'positive' | 'neutral' | 'negative'
+  metrics: PortfolioMetrics
+  probabilityMode: 'implied' | 'custom'
+  customValid: boolean
+  canonicalStrategy: CanonicalStrategyKey
+}
+
+export type CalculatePlanOptions = {
+  probabilitySource?: ProbabilitySource
+  config?: Partial<CalculatorConfig>
+  strategyInputMode?: 'canonical' | 'legacy'
 }
 
 // 总进球玩法固定 8 档，对应 0 球到 7+ 球
@@ -66,47 +79,33 @@ export const DEFAULT_ODDS: MatchOdds = {
   s7: DEFAULT_PLACEHOLDER_ODDS
 }
 
-// 三档策略：
-// balanced：更保守，优先守低赔率结果
-// aggressive：默认档，尽量平衡“多覆盖”和“保低赔”
-// all-in：更激进，愿意把剩余预算继续往高回报方向推
-export const STRATEGY_CONFIGS: Record<StrategyKey, CalculatorConfig> = {
+export const CANONICAL_STRATEGY_CONFIGS: Record<CanonicalStrategyKey, CalculatorConfig> = {
+  coverage: {
+    minStakeUnit: 1,
+    maxConcentrationRatio: 0.36
+  },
   balanced: {
     minStakeUnit: 1,
-    protectedCount: 3,
-    probabilityPower: 1.22,
-    countPriority: 120,
-    probabilityPriority: 54,
-    efficiencyPriority: 26,
-    longshotPriority: 6,
-    maxConcentrationRatio: 0.36,
-    residualPreference: 'protected'
+    maxConcentrationRatio: 0.44
   },
-  aggressive: {
+  payout: {
     minStakeUnit: 1,
-    protectedCount: 2,
-    probabilityPower: 1.08,
-    countPriority: 120,
-    probabilityPriority: 40,
-    efficiencyPriority: 28,
-    longshotPriority: 10,
-    maxConcentrationRatio: 0.46,
-    residualPreference: 'balanced'
+    maxConcentrationRatio: 0.58
   },
-  'all-in': {
+  expected: {
     minStakeUnit: 1,
-    protectedCount: 1,
-    probabilityPower: 0.94,
-    countPriority: 120,
-    probabilityPriority: 30,
-    efficiencyPriority: 20,
-    longshotPriority: 18,
-    maxConcentrationRatio: 0.58,
-    residualPreference: 'return'
+    maxConcentrationRatio: 0.5
   }
 }
 
-export const DEFAULT_STRATEGY: StrategyKey = 'aggressive'
+// 页面现在已经直接使用 canonical key；
+// 保留 legacy 映射只是为了兼容旧入口和后续回归对比。
+export const DEFAULT_STRATEGY: StrategyKey = 'balanced'
+export const LEGACY_TO_CANONICAL_STRATEGY: Record<LegacyStrategyKey, StrategyKey> = {
+  balanced: 'coverage',
+  aggressive: 'balanced',
+  'all-in': 'payout'
+}
 
 // 解析页面里的赔率输入，并同步生成字段错误状态。
 export function parseOddsList(oddsForm: Record<(typeof GOAL_KEYS)[number], string>) {
@@ -151,245 +150,211 @@ export function normalizePrincipal(input: string | number) {
   }
 }
 
-function roundUpToUnit(value: number, minStakeUnit: number) {
-  const rounded = Math.ceil(value / minStakeUnit) * minStakeUnit
-  return Math.max(minStakeUnit, rounded)
-}
-
-// 用赔率倒数估算一个相对概率权重。
-function buildProbabilityWeights(oddsValues: number[], power: number) {
-  const weights = oddsValues.map((odds) => 1 / Math.pow(odds, power))
-  const total = weights.reduce((sum, item) => sum + item, 0)
-  return weights.map((item) => item / total)
-}
-
-// 计算某个结果达到“回本/盈利线”至少需要多少股。
-function getBreakEvenShares(principal: number, odds: number, minStakeUnit: number) {
-  return roundUpToUnit(principal / (odds * 2), minStakeUnit)
-}
-
-function getRankedIndexes(oddsValues: number[]) {
-  return [...oddsValues]
-    .map((odds, index) => ({ odds, index }))
-    .sort((a, b) => a.odds - b.odds)
-    .map((item) => item.index)
-}
-
-function getRankMap(rankedIndexes: number[]) {
-  const rankMap = new Array(rankedIndexes.length).fill(0)
-  rankedIndexes.forEach((index, rank) => {
-    rankMap[index] = rank
-  })
-  return rankMap
-}
-
-// 在剩余预算内，找出“额外补到盈利线”最划算的一组结果。
-// 这里的目标不是平均分，而是优先做到：
-// - 多几个结果能盈利
-// - 同时保住相对更可能发生的低赔率结果
-function pickCoverageIndexes(
-  candidateIndexes: number[],
-  extraNeed: number[],
-  sharesLeft: number,
-  probabilityWeights: number[],
-  oddsValues: number[],
-  averageOdds: number,
-  config: CalculatorConfig
+function resolveCanonicalStrategy(
+  strategy: StrategyKey | CanonicalStrategyKey | LegacyStrategyKey,
+  inputMode: 'canonical' | 'legacy' = 'canonical'
 ) {
-  let bestIndexes: number[] = []
-  let bestScore = -Infinity
-  let bestCost = 0
-
-  const totalCandidates = candidateIndexes.length
-  const totalMasks = 1 << totalCandidates
-
-  for (let mask = 0; mask < totalMasks; mask++) {
-    let cost = 0
-    let count = 0
-    let probabilityScore = 0
-    let efficiencyScore = 0
-    let longshotScore = 0
-    const selected: number[] = []
-
-    for (let bit = 0; bit < totalCandidates; bit++) {
-      if ((mask & (1 << bit)) === 0) {
-        continue
-      }
-
-      const index = candidateIndexes[bit]
-      const need = extraNeed[index]
-      cost += need
-      if (cost > sharesLeft) {
-        break
-      }
-
-      count += 1
-      probabilityScore += probabilityWeights[index]
-      efficiencyScore += probabilityWeights[index] / Math.max(need, 1)
-      longshotScore += Math.max(0, oddsValues[index] / averageOdds - 1)
-      selected.push(index)
-    }
-
-    if (cost > sharesLeft) {
-      continue
-    }
-
-    const score =
-      count * config.countPriority +
-      probabilityScore * config.probabilityPriority +
-      efficiencyScore * config.efficiencyPriority +
-      longshotScore * config.longshotPriority
-
-    if (
-      score > bestScore ||
-      (score === bestScore && count > bestIndexes.length) ||
-      (score === bestScore && count === bestIndexes.length && cost < bestCost)
-    ) {
-      bestScore = score
-      bestIndexes = selected
-      bestCost = cost
-    }
+  // legacy 模式下允许把旧三档语义显式映射到新策略；
+  // canonical 模式下则优先信任调用方，不再做“同名再映射”。
+  if (inputMode === 'legacy') {
+    return LEGACY_TO_CANONICAL_STRATEGY[strategy as LegacyStrategyKey]
   }
 
-  return bestIndexes
-}
-
-// 处理剩余股数。
-// 这一步不再追求“硬覆盖几个盈利项”，而是根据不同策略做最后微调：
-// - 稳健：继续保护低赔率
-// - 激进：兼顾低赔率和接近盈利线的结果
-// - 冲刺：更愿意把剩余仓位推向高回报结果
-function distributeResidualShares(
-  allocations: number[],
-  sharesLeft: number,
-  breakEvenShares: number[],
-  probabilityWeights: number[],
-  oddsValues: number[],
-  config: CalculatorConfig
-) {
-  const normalized = [...allocations]
-  const averageOdds = oddsValues.reduce((sum, odds) => sum + odds, 0) / oddsValues.length
-  const rankedIndexes = getRankedIndexes(oddsValues)
-  const rankMap = getRankMap(rankedIndexes)
-  const expectedShares = normalized.reduce((sum, item) => sum + item, 0) + sharesLeft
-  const baseLimit = Math.max(config.minStakeUnit, Math.floor(expectedShares * config.maxConcentrationRatio))
-
-  while (sharesLeft > 0) {
-    let bestIndex = -1
-    let bestScore = -Infinity
-
-    normalized.forEach((value, index) => {
-      const dynamicLimit = Math.max(baseLimit, value)
-      if (value + config.minStakeUnit > dynamicLimit) {
-        return
-      }
-
-      const gapToBreakEven = Math.max(0, breakEvenShares[index] - value)
-      const isProtectedZone = rankMap[index] < Math.max(2, config.protectedCount + 1)
-      let score = probabilityWeights[index] * config.probabilityPriority
-
-      if (gapToBreakEven > 0) {
-        score += (config.countPriority * 0.28) / gapToBreakEven
-      } else {
-        score += config.countPriority * 0.04
-      }
-
-      if (config.residualPreference === 'protected' && isProtectedZone) {
-        score += 12
-      }
-
-      if (config.residualPreference === 'balanced' && gapToBreakEven > 0) {
-        score += 8
-      }
-
-      if (config.residualPreference === 'return') {
-        score += (oddsValues[index] / averageOdds) * config.longshotPriority
-      } else {
-        score += Math.max(0, oddsValues[index] / averageOdds - 1) * config.longshotPriority
-      }
-
-      if (score > bestScore) {
-        bestScore = score
-        bestIndex = index
-      }
-    })
-
-    if (bestIndex === -1) {
-      break
-    }
-
-    normalized[bestIndex] += config.minStakeUnit
-    sharesLeft -= config.minStakeUnit
+  if (strategy === 'aggressive' || strategy === 'all-in') {
+    return LEGACY_TO_CANONICAL_STRATEGY[strategy]
   }
 
-  return normalized
+  return strategy as CanonicalStrategyKey
 }
 
-// 主算法。
-// 当前版本不再是“简单按赔率比例均分”，而是：
-// 1. 先给全部进球数一个基础持仓，避免完全空档
-// 2. 先保护一部分低赔率结果
-// 3. 再在预算内尽量把更多结果推到盈利线以上
-// 4. 最后把剩余仓位按策略做微调
+function resolveCalculatePlanOptions(
+  options?: Partial<CalculatorConfig> | CalculatePlanOptions
+): CalculatePlanOptions {
+  if (!options) {
+    return {}
+  }
+
+  const maybeLegacyConfig = options as Partial<CalculatorConfig>
+  if (
+    'minStakeUnit' in maybeLegacyConfig ||
+    'maxConcentrationRatio' in maybeLegacyConfig
+  ) {
+    return { config: maybeLegacyConfig }
+  }
+
+  return options as CalculatePlanOptions
+}
+
+function scoreCandidateByStrategy(
+  strategy: CanonicalStrategyKey,
+  metrics: PortfolioMetrics,
+  customValid: boolean
+) {
+  if (strategy === 'coverage') {
+    return scoreCoverageCandidate(metrics)
+  }
+
+  if (strategy === 'balanced') {
+    return scoreBalancedCandidate(metrics)
+  }
+
+  if (strategy === 'payout') {
+    return scorePayoutCandidate(metrics)
+  }
+
+  if (strategy === 'expected' && customValid) {
+    return scoreExpectedCandidate(metrics)
+  }
+
+  return scoreBalancedCandidate(metrics)
+}
+
+// summary 是给页面结论层用的“压缩视图”，
+// 不直接决定分配，只负责把底层指标翻译成更稳定的展示语义。
+function getCoverageLevel(metrics: PortfolioMetrics): PlanSummary['coverageLevel'] {
+  const coverage = getCoverageMetrics(metrics)
+
+  if (coverage.fullCoverageCount >= 5 || coverage.nearCoverageCount >= 6) {
+    return 'strong'
+  }
+
+  if (coverage.fullCoverageCount >= 3 || coverage.nearCoverageCount >= 4) {
+    return 'moderate'
+  }
+
+  return 'limited'
+}
+
+function getConcentrationLevel(maxConcentrationRatio: number): PlanSummary['concentrationLevel'] {
+  if (maxConcentrationRatio >= 0.5) {
+    return 'high'
+  }
+
+  if (maxConcentrationRatio >= 0.35) {
+    return 'medium'
+  }
+
+  return 'low'
+}
+
+function getRiskClassification(
+  canonicalStrategy: CanonicalStrategyKey,
+  concentrationLevel: PlanSummary['concentrationLevel']
+): PlanSummary['riskClassification'] {
+  if (canonicalStrategy === 'payout') {
+    return 'high'
+  }
+
+  if (canonicalStrategy === 'coverage' && concentrationLevel === 'low') {
+    return 'low'
+  }
+
+  return concentrationLevel === 'high' ? 'high' : 'medium'
+}
+
+function getExpectedReturnQuality(
+  expectedNetReturn: number,
+  probabilityMode: 'implied' | 'custom',
+  customValid: boolean
+): PlanSummary['expectedReturnQuality'] {
+  if (probabilityMode !== 'custom' || !customValid) {
+    return 'inactive'
+  }
+
+  if (expectedNetReturn > 0) {
+    return 'positive'
+  }
+
+  if (expectedNetReturn === 0) {
+    return 'neutral'
+  }
+
+  return 'negative'
+}
+
+export function calculatePlanDetails(
+  oddsValues: number[],
+  principal: number,
+  strategy: StrategyKey | CanonicalStrategyKey | LegacyStrategyKey = DEFAULT_STRATEGY,
+  options?: Partial<CalculatorConfig> | CalculatePlanOptions
+) {
+  const resolvedOptions = resolveCalculatePlanOptions(options)
+  let canonicalStrategy = resolveCanonicalStrategy(strategy, resolvedOptions.strategyInputMode)
+  const baseConfig = CANONICAL_STRATEGY_CONFIGS[canonicalStrategy]
+  const config: CalculatorConfig = {
+    ...baseConfig,
+    ...resolvedOptions.config
+  }
+
+  const totalShares = principalToTotalShares(principal, SHARE_COST_YUAN)
+  const allocations = createMinimumAllocations(oddsValues.length, config.minStakeUnit)
+  const baseAllocatedShares = allocations.reduce((sum, item) => sum + item, 0)
+  const sharesLeft = Math.max(0, totalShares - baseAllocatedShares)
+
+  const probabilityResolution = resolveProbabilityVector(
+    oddsValues,
+    resolvedOptions.probabilitySource || { mode: 'implied' }
+  )
+
+  // expected 只有在 custom probability 真正有效时才有数学意义，
+  // 否则回退到 balanced，避免名字正确但目标失真。
+  if (canonicalStrategy === 'expected' && !probabilityResolution.customValid) {
+    canonicalStrategy = 'balanced'
+  }
+
+  // 第一版仍然采用逐股贪心，但“如何打分”已经切到统一框架：
+  // 约束层负责能不能加，策略层负责这一股该加给谁。
+  const nextAllocations =
+    sharesLeft > 0
+      ? runGreedyAllocation({
+          allocations,
+          sharesLeft,
+          totalShares,
+          minStakeUnit: config.minStakeUnit,
+          maxConcentrationRatio: config.maxConcentrationRatio,
+          scoreCandidate: (_candidateIndex, candidateAllocations) => {
+            const metrics = evaluatePortfolio(
+              candidateAllocations,
+              oddsValues,
+              principal,
+              probabilityResolution.values
+            )
+
+            return scoreCandidateByStrategy(canonicalStrategy, metrics, probabilityResolution.customValid)
+          }
+        })
+      : allocations
+
+  const metrics = evaluatePortfolio(nextAllocations, oddsValues, principal, probabilityResolution.values)
+  const concentrationLevel = getConcentrationLevel(metrics.maxConcentrationRatio)
+
+  return {
+    allocations: nextAllocations,
+    summary: {
+      coverageLevel: getCoverageLevel(metrics),
+      concentrationLevel,
+      maximumNetSingleHitReturn: metrics.maxNetSingleHitReturn,
+      riskClassification: getRiskClassification(canonicalStrategy, concentrationLevel),
+      expectedReturnQuality: getExpectedReturnQuality(
+        metrics.expectedNetReturn,
+        probabilityResolution.mode,
+        probabilityResolution.customValid
+      ),
+      metrics,
+      probabilityMode: probabilityResolution.mode,
+      customValid: probabilityResolution.customValid,
+      canonicalStrategy
+    } satisfies PlanSummary
+  }
+}
+
 export function calculatePlan(
   oddsValues: number[],
   principal: number,
-  strategy: StrategyKey = DEFAULT_STRATEGY,
-  customConfig?: Partial<CalculatorConfig>
+  strategy: StrategyKey | LegacyStrategyKey = DEFAULT_STRATEGY,
+  options?: Partial<CalculatorConfig> | CalculatePlanOptions
 ) {
-  const config: CalculatorConfig = {
-    ...STRATEGY_CONFIGS[strategy],
-    ...customConfig
-  }
-
-  const expectedShares = principal / 2
-  const allocations = new Array(oddsValues.length).fill(config.minStakeUnit)
-  let sharesLeft = expectedShares - allocations.reduce((sum, item) => sum + item, 0)
-
-  if (sharesLeft <= 0) {
-    return allocations
-  }
-
-  const rankedIndexes = getRankedIndexes(oddsValues)
-  const averageOdds = oddsValues.reduce((sum, odds) => sum + odds, 0) / oddsValues.length
-  const probabilityWeights = buildProbabilityWeights(oddsValues, config.probabilityPower)
-  const breakEvenShares = oddsValues.map((odds) => getBreakEvenShares(principal, odds, config.minStakeUnit))
-  const extraNeed = breakEvenShares.map((shares) => Math.max(0, shares - config.minStakeUnit))
-
-  // 先保护前几个低赔率结果，如果预算不够，就按顺序保护到预算上限为止。
-  const protectedIndexes = rankedIndexes.filter((index) => extraNeed[index] > 0).slice(0, config.protectedCount)
-  protectedIndexes.forEach((index) => {
-    const need = extraNeed[index]
-    if (need <= sharesLeft) {
-      allocations[index] = breakEvenShares[index]
-      sharesLeft -= need
-    }
-  })
-
-  // 剩余预算继续尽量扩大“盈利结果”的覆盖数量。
-  const candidateIndexes = rankedIndexes.filter(
-    (index) => extraNeed[index] > 0 && allocations[index] < breakEvenShares[index]
-  )
-
-  const coverageIndexes = pickCoverageIndexes(
-    candidateIndexes,
-    extraNeed,
-    sharesLeft,
-    probabilityWeights,
-    oddsValues,
-    averageOdds,
-    config
-  )
-
-  coverageIndexes.forEach((index) => {
-    const need = breakEvenShares[index] - allocations[index]
-    if (need <= sharesLeft) {
-      allocations[index] = breakEvenShares[index]
-      sharesLeft -= need
-    }
-  })
-
-  return distributeResidualShares(allocations, sharesLeft, breakEvenShares, probabilityWeights, oddsValues, config)
+  return calculatePlanDetails(oddsValues, principal, strategy, options).allocations
 }
 
 // 把内部股数结果转换成页面表格可直接渲染的数据。
@@ -398,26 +363,29 @@ export function buildResultRows(allocations: number[], oddsValues: number[]): Re
     NumberOfGoals: index,
     NumberOfGoalsLabel: GOAL_LABELS[index],
     ExpectedInput: allocations[index],
-    AmountInvested: allocations[index] * 2,
-    ExpectedReturn: Math.round(allocations[index] * 2 * oddsValues[index])
+    AmountInvested: allocations[index] * SHARE_COST_YUAN,
+    ExpectedReturn: Math.round(allocations[index] * SHARE_COST_YUAN * oddsValues[index])
   }))
 }
 
-// 根据结果表做一个简短的可读结论。
-export function getRecommendation(rows: ResultRow[], principal: number) {
-  const profitableCount = rows.filter((row) => row.ExpectedReturn >= principal).length
-
-  if (profitableCount >= 5) {
-    return '本场盈利覆盖较多，可重点关注'
+export function getRecommendation(summary: PlanSummary) {
+  // 推荐文案现在只依赖 summary，
+  // 这样页面层不需要知道 coverage / concentration / expected 的细节公式。
+  if (summary.expectedReturnQuality === 'positive') {
+    return '当前自定义概率下期望收益为正，可重点结合模型判断'
   }
 
-  if (profitableCount >= 3) {
-    return '本场具备一定覆盖面，可结合临场判断'
+  if (summary.coverageLevel === 'strong' && summary.concentrationLevel === 'low') {
+    return '当前覆盖较完整，分配也较分散，适合稳健参考'
   }
 
-  if (profitableCount >= 1) {
-    return '当前更偏向挑点收益，适合谨慎分配'
+  if (summary.coverageLevel !== 'limited' && summary.riskClassification !== 'high') {
+    return '当前覆盖与集中度较均衡，可结合临场信息继续判断'
   }
 
-  return '当前赔率结构较难形成盈利覆盖，建议谨慎投入'
+  if (summary.maximumNetSingleHitReturn > 0 && summary.riskClassification === 'high') {
+    return '当前更偏向单点冲高回报，命中收益更高但波动也更大'
+  }
+
+  return '当前赔率结构偏紧或分配空间有限，建议谨慎投入'
 }

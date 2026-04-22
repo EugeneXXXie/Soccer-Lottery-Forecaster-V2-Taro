@@ -132,8 +132,8 @@
               <text class="summary-value">{{ currentStrategyLabel }}</text>
             </view>
             <view class="summary-item">
-              <text class="summary-label">盈利档数</text>
-              <text class="summary-value">{{ profitableResultCount }} / {{ oddsFields.length }}</text>
+              <text class="summary-label">覆盖水平</text>
+              <text class="summary-value">{{ coverageLevelLabel }}</text>
             </view>
             <view class="summary-item summary-item-column">
               <text class="summary-label">建议结论</text>
@@ -216,13 +216,13 @@ import {
   GOAL_KEYS,
   GOAL_LABELS,
   buildResultRows,
-  calculatePlan,
+  calculatePlanDetails,
   getRecommendation,
   normalizePrincipal,
   parseOddsList
 } from '../../utils/lotteryCalculator'
 import { parseRemoteMatchOdds } from '../../utils/matchOdds'
-import type { MatchOdds, ResultRow, StrategyKey } from '../../utils/lotteryCalculator'
+import type { MatchOdds, PlanSummary, ResultRow, StrategyKey } from '../../utils/lotteryCalculator'
 
 // 比赛选择器里每个选项的数据结构。
 type MatchOption = {
@@ -261,25 +261,26 @@ const principalInput = ref('')
 const normalizedPrincipal = ref(0)
 const recommendationText = ref('尚未计算')
 const resultRows = ref<ResultRow[]>([])
+const planSummary = ref<PlanSummary | null>(null)
 const fieldErrors = reactive<Record<string, boolean>>({})
 const principalError = ref(false)
 const strategyMode = ref<StrategyKey>(DEFAULT_STRATEGY)
 
 const strategyOptions: { label: string; value: StrategyKey; description: string }[] = [
   {
-    label: '稳健',
+    label: '覆盖',
+    value: 'coverage',
+    description: '优先扩大可回本或近回本的结果覆盖，更适合看重保护面的分配。'
+  },
+  {
+    label: '均衡',
     value: 'balanced',
-    description: '更偏向保护低赔率结果，覆盖相对集中，适合先看保守分布。'
+    description: '在覆盖、概率贴合和波动控制之间折中，适合作为默认方案。'
   },
   {
-    label: '激进',
-    value: 'aggressive',
-    description: '兼顾低赔率保护和收益扩张，适合大多数场景先试。'
-  },
-  {
-    label: '冲刺',
-    value: 'all-in',
-    description: '更愿意把预算压向更高回报区间，覆盖更广，也更冒险。'
+    label: '高回报',
+    value: 'payout',
+    description: '优先提高命中后的单场净收益上限，波动更大，也更偏向冲高。'
   }
 ]
 
@@ -316,8 +317,17 @@ const currentStrategyDescription = computed(() => {
 const currentStrategyLabel = computed(() => {
   return strategyOptions.find((item) => item.value === strategyMode.value)?.label || ''
 })
-const profitableResultCount = computed(() => {
-  return resultRows.value.filter((row) => row.ExpectedReturn >= normalizedPrincipal.value).length
+const coverageLevelLabel = computed(() => {
+  const level = planSummary.value?.coverageLevel
+  if (level === 'strong') {
+    return '高覆盖'
+  }
+
+  if (level === 'moderate') {
+    return '中覆盖'
+  }
+
+  return level ? '有限覆盖' : '--'
 })
 
 // 把联赛 code / 名称映射成可展示的国旗或赛事图标。
@@ -441,6 +451,7 @@ function validateOddsForm() {
 
 function resetResults() {
   resultRows.value = []
+  planSummary.value = null
   recommendationText.value = '尚未计算'
 }
 
@@ -470,7 +481,8 @@ function handleCalculate() {
   const principal = principalMeta.normalized
   normalizedPrincipal.value = principal
 
-  const allocations = calculatePlan(values, principal, strategyMode.value)
+  const planDetails = calculatePlanDetails(values, principal, strategyMode.value)
+  const allocations = planDetails.allocations
   const hasInvalidAllocation = allocations.some((item) => item <= 0)
   if (hasInvalidAllocation) {
     showToast('赔率或投入金额过小', 'error')
@@ -481,7 +493,8 @@ function handleCalculate() {
   const rows = buildResultRows(allocations, values)
 
   resultRows.value = rows
-  recommendationText.value = getRecommendation(rows, principal)
+  planSummary.value = planDetails.summary
+  recommendationText.value = getRecommendation(planDetails.summary)
   showToast('计算成功', 'success')
 }
 
