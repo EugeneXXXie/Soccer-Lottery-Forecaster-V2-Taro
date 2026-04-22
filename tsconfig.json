@@ -2,7 +2,6 @@
   "compilerOptions": {
     "target": "es2017",
     "module": "commonjs",
-    "moduleResolution": "node",
     "jsx": "preserve",
     "strictNullChecks": true,
     "noUnusedLocals": true,
@@ -10,7 +9,6 @@
     "allowSyntheticDefaultImports": true,
     "resolveJsonModule": true,
     "allowJs": true,
-    "baseUrl": ".",
     "rootDir": ".",
     "outDir": "lib",
     "sourceMap": true,
